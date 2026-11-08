@@ -6,6 +6,22 @@ import { outdent } from 'outdent'
 describe('unrecognized server actions', () => {
   const unrecognizedActionId = '0'.repeat(42)
 
+  // Multipart POSTs that don't carry a valid FormData body. These can't be
+  // Server Action submissions and should be rejected instead of failing with a
+  // 500 when parsing the body.
+  const malformedMultipartRequests = [
+    {
+      description: 'without a boundary',
+      contentType: 'multipart/form-data',
+      body: 'foo=bar',
+    },
+    {
+      description: 'with a malformed body',
+      contentType: 'multipart/form-data; boundary=----nextjs-test-boundary',
+      body: 'this is not a multipart body',
+    },
+  ]
+
   const { next, isNextDeploy } = nextTestSetup({
     files: __dirname,
   })
@@ -37,6 +53,23 @@ describe('unrecognized server actions', () => {
       )
       expect(res.status).toBe(404)
     })
+
+    it.each(malformedMultipartRequests)(
+      'should reject a multipart POST $description to a nonexistent page',
+      async ({ contentType, body }) => {
+        const res = await next.fetch('/non-existent-route', {
+          method: 'POST',
+          headers: {
+            'content-type': contentType,
+          },
+          body,
+        })
+
+        expect(res.status).toBe(400)
+        expect(res.headers.get('content-type')).toStartWith('text/plain')
+        expect(await res.text()).toBe('Invalid Server Action request.')
+      }
+    )
 
     describe.each([
       {
@@ -170,6 +203,23 @@ describe('unrecognized server actions', () => {
           if (!isNextDeploy) {
             await retry(async () => expect(getLogs()).toInclude(expectedError))
           }
+        }
+      )
+
+      it.each(malformedMultipartRequests)(
+        'should reject a multipart POST $description',
+        async ({ contentType, body }) => {
+          const response = await next.fetch(`/${runtime}/unrecognized-action`, {
+            method: 'POST',
+            headers: {
+              'content-type': contentType,
+            },
+            body,
+          })
+
+          expect(response.status).toBe(400)
+          expect(response.headers.get('content-type')).toStartWith('text/plain')
+          expect(await response.text()).toBe('Invalid Server Action request.')
         }
       )
 

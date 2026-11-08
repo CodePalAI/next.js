@@ -905,11 +905,25 @@ export async function handleAction({
             // would fail to match and `formData()` would throw. An explicit header
             // on the Request takes precedence over the Blob's normalized type.
             const edgeBodyBlob = new Blob(edgeChunks as BlobPart[])
-            const formData = await new Request('http://n/', {
-              method: 'POST',
-              headers: { 'content-type': req.headers['content-type'] ?? '' },
-              body: edgeBodyBlob,
-            }).formData()
+            let formData: FormData
+            try {
+              formData = await new Request('http://n/', {
+                method: 'POST',
+                headers: { 'content-type': req.headers['content-type'] ?? '' },
+                body: edgeBodyBlob,
+              }).formData()
+            } catch (err) {
+              if (isFetchAction) {
+                throw err
+              }
+
+              // Any multipart POST can get here, including one to a page that has
+              // no Server Actions or to a nonexistent route. A body that can't be
+              // parsed as FormData (e.g. a missing or mismatched boundary) can't be
+              // an MPA Server Action submission, so we reject it like other invalid
+              // Server Action requests instead of failing with a 500.
+              return handleUnrecognizedAction(err, 400)
+            }
             if (isFetchAction) {
               // A fetch action with a multipart body.
 
@@ -1144,7 +1158,20 @@ export async function handleAction({
                 ])
               } catch (err) {
                 abortController.abort()
-                throw err
+
+                // Exceeding the body size limit is reported as before.
+                const { ApiError } =
+                  require('../api-utils') as typeof import('../api-utils')
+                if (err instanceof ApiError) {
+                  throw err
+                }
+
+                // Any multipart POST can get here, including one to a page that has
+                // no Server Actions or to a nonexistent route. A body that can't be
+                // parsed as FormData (e.g. a missing or mismatched boundary) can't be
+                // an MPA Server Action submission, so we reject it like other invalid
+                // Server Action requests instead of failing with a 500.
+                return handleUnrecognizedAction(err, 400)
               }
 
               try {
